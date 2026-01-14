@@ -2,20 +2,66 @@
 import React, { useState, useMemo } from 'react';
 import LifeKLineChart from './components/LifeKLineChart';
 import AnalysisResult from './components/AnalysisResult';
-import ImportDataMode from './components/ImportDataMode';
-import { LifeDestinyResult } from './types';
+import BaziForm from './components/BaziForm';
+import { LifeDestinyResult, UserInput } from './types';
 import { Sparkles, AlertCircle, Download, Printer, Trophy, FileDown, FileUp } from 'lucide-react';
 
 const App: React.FC = () => {
   const [result, setResult] = useState<LifeDestinyResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>('');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
-  // 处理导入数据
-  const handleDataImport = (data: LifeDestinyResult) => {
-    setResult(data);
-    setUserName('');
+  // 处理 Direct API 表单提交
+  const handleBaziSubmit = async (data: UserInput) => {
+    setIsLoading(true);
     setError(null);
+
+    try {
+      // 调用后端 Vercel Function（相对路径，Vercel 会自动路由）
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `请求失败: ${response.status}`);
+      }
+
+      const apiResult = await response.json();
+
+      // 转换为应用格式
+      const analysisResult: LifeDestinyResult = {
+        chartData: apiResult.chartPoints,
+        analysis: {
+          bazi: apiResult.bazi || [],
+          summary: apiResult.summary || "无摘要",
+          summaryScore: apiResult.summaryScore || 5,
+          personality: apiResult.personality || "无性格分析",
+          personalityScore: apiResult.personalityScore || 5,
+          industry: apiResult.industry || "无",
+          industryScore: apiResult.industryScore || 5,
+          wealth: apiResult.wealth || "无",
+          wealthScore: apiResult.wealthScore || 5,
+          marriage: apiResult.marriage || "无",
+          marriageScore: apiResult.marriageScore || 5,
+          health: apiResult.health || "无",
+          healthScore: apiResult.healthScore || 5,
+        },
+      };
+
+      setResult(analysisResult);
+      setUserName(data.name || '');
+    } catch (err: any) {
+      console.error('Analysis error:', err);
+      setError(err.message || '生成失败，请稍后重试');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // 导出为 JSON 文件
@@ -30,20 +76,12 @@ const App: React.FC = () => {
       personalityScore: result.analysis.personalityScore,
       industry: result.analysis.industry,
       industryScore: result.analysis.industryScore,
-      fengShui: result.analysis.fengShui,
-      fengShuiScore: result.analysis.fengShuiScore,
       wealth: result.analysis.wealth,
       wealthScore: result.analysis.wealthScore,
       marriage: result.analysis.marriage,
       marriageScore: result.analysis.marriageScore,
       health: result.analysis.health,
       healthScore: result.analysis.healthScore,
-      family: result.analysis.family,
-      familyScore: result.analysis.familyScore,
-      crypto: result.analysis.crypto,
-      cryptoScore: result.analysis.cryptoScore,
-      cryptoYear: result.analysis.cryptoYear,
-      cryptoStyle: result.analysis.cryptoStyle,
       chartPoints: result.chartData,
     };
 
@@ -83,20 +121,12 @@ const App: React.FC = () => {
             personalityScore: data.personalityScore || 5,
             industry: data.industry || "无",
             industryScore: data.industryScore || 5,
-            fengShui: data.fengShui || "建议多亲近自然，保持心境平和。",
-            fengShuiScore: data.fengShuiScore || 5,
             wealth: data.wealth || "无",
             wealthScore: data.wealthScore || 5,
             marriage: data.marriage || "无",
             marriageScore: data.marriageScore || 5,
             health: data.health || "无",
             healthScore: data.healthScore || 5,
-            family: data.family || "无",
-            familyScore: data.familyScore || 5,
-            crypto: data.crypto || "暂无交易分析",
-            cryptoScore: data.cryptoScore || 5,
-            cryptoYear: data.cryptoYear || "待定",
-            cryptoStyle: data.cryptoStyle || "现货定投",
           },
         };
 
@@ -294,15 +324,14 @@ const App: React.FC = () => {
                 结合<strong>传统八字命理</strong>与<strong>金融可视化技术</strong>，
                 将您的一生运势绘制成类似股票行情的K线图。
               </p>
-
-              {/* 使用说明 */}
               <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-xl border border-indigo-100 mb-6 text-left w-full max-w-lg">
-                <h3 className="font-bold text-indigo-800 mb-2">📝 使用方法</h3>
-                <ol className="text-sm text-gray-600 space-y-1 list-decimal list-inside">
-                  <li>填写八字信息，生成专属提示词</li>
-                  <li>复制提示词到任意 AI（ChatGPT、Claude、Gemini 等）</li>
-                  <li>将 AI 返回的 JSON 数据粘贴回来</li>
-                </ol>
+                <h3 className="font-bold text-indigo-800 mb-2">🔐 专业命理系统</h3>
+                <ul className="text-sm text-indigo-700 space-y-1 list-disc list-inside">
+                  <li>结合《滴天髓》《穷通宝鉴》经典理论</li>
+                  <li>格局 &gt; 调候 &gt; 旺衰优先级体系</li>
+                  <li>生命周期底盘精准评分</li>
+                  <li>需配置 AI API 以确保分析准确性</li>
+                </ul>
               </div>
 
               {/* 快速导入 JSON 文件 */}
@@ -318,8 +347,8 @@ const App: React.FC = () => {
               </label>
             </div>
 
-            {/* 导入模式组件 */}
-            <ImportDataMode onDataImport={handleDataImport} />
+            {/* BaziForm 组件 */}
+            <BaziForm onSubmit={handleBaziSubmit} isLoading={isLoading} />
 
             {error && (
               <div className="flex items-center gap-2 text-red-600 bg-red-50 px-4 py-3 rounded-lg border border-red-100 max-w-md w-full animate-bounce-short">

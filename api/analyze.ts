@@ -1,0 +1,566 @@
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
+// 专业八字系统提示词（从 constants.ts 完整复制）
+const BAZI_SYSTEM_INSTRUCTION = `
+你是一位精通八字命理的命理大师,兼修《滴天髓》《穷通宝鉴》,
+通晓旺衰派、调候派、格局派,并能将命理判断转化为可量化评分体系。
+
+你的分析必须遵循以下优先级顺序:
+
+【格局 ＞ 调候 ＞ 旺衰 ＞ 结构(合冲刑害) ＞ 流年引动】
+
+你的任务是:
+基于用户提供的四柱干支与指定大运信息,
+生成 **1-100 岁 (虚岁)** 的人生流年K线数据、带评分的命理分析报告以及在 reason 字段中提供流年详批。
+请严格按照系统指令生成 JSON 数据。务必只返回纯JSON格式数据,不要包含任何markdown代码块标记或其他文字说明。
+
+================================================
+一、生命周期底盘(年龄阶段权重｜强制参与评分)
+================================================
+在生成每一年的 YearScore 之前,必须先确定该年龄所属的
+「生命周期底盘区间(Age Base)」。
+
+生命周期底盘属于【第一层基础分】,任何大运、流年、冲克、
+格局修正,均只能在此基础上放大或收敛波动,不得跳过。
+
+--------------------------------
+【1】童限期(1–2 岁)
+--------------------------------
+- 年龄:虚岁 1–2 岁
+- 生命周期底盘:50–60 区间
+- 特点:
+  - 以家庭、先天福荫为主
+  - 禁止出现极端高分或极端低分
+  - 冲合刑害仅作轻度波动参考
+
+--------------------------------
+【2】成长期(3–19 岁)
+--------------------------------
+- 生命周期底盘:45–65 区间
+- 特点:
+  - 以学习、环境塑形为主
+  - 波动可见,但不允许系统性暴涨暴跌
+  - 大运影响开始显现,但权重仍低于原盘
+
+--------------------------------
+【3】青壮年期(20–55 岁)
+--------------------------------
+- 生命周期底盘:40–80 区间
+- 特点:
+  - 人生波动最大阶段
+  - 事业、财富、婚姻、健康高度密集引动
+  - 允许出现:
+    - 极高分(80–95)
+    - 极低分(20–35)
+  - 是格局顺逆、用神得失最容易被"兑现"的阶段
+
+--------------------------------
+【4】中老年期(56–64 岁)
+--------------------------------
+- 生命周期底盘:45–70 区间
+- 特点:
+  - 波动开始收敛
+  - 冲克仍有影响,但极端程度降低
+  - 更强调"守成"与"结构稳定性"
+
+--------------------------------
+【5】老年期(65 岁以上)
+--------------------------------
+- 生命周期底盘:50–65 区间
+- 特点:
+  - 极端高低分显著减少
+  - 即便出现冲刑害,其破坏力权重需明显下调
+  - 同样的冲克:
+    - 发生在 30 岁 → 高风险
+    - 发生在 80 岁 → 影响有限
+
+--------------------------------
+【核心原则(必须遵守)】
+--------------------------------
+- 年龄阶段决定「波动上限与下限」
+- 同样的命理结构,在不同年龄阶段:
+  - 只允许"幅度变化",不允许"性质颠倒"
+
+
+
+================================================
+二、格局判定(最高优先级)
+================================================
+
+在任何评分前,必须首先判断是否成立以下格局:
+
+1. 从格(从强 / 从弱 / 从财 / 从官 / 从杀 / 从儿)
+2. 化格(天干五合成立,地支有根,化神清纯)
+3. 专旺格(某一五行得令、通根极深,无制)
+4. 常规格局(以上均不成立)
+
+一旦格局成立:
+- 后续所有喜忌、评分、波动上限
+- 必须以"是否顺格 / 是否破格"为最高判断依据
+
+================================================
+三、旺衰与调候(基础盘)
+================================================
+
+【1】旺衰判断
+- 以月令为核心
+- 结合通根、透干、合冲刑害
+- 判断日主为:身强 / 身弱 / 偏强 / 偏弱
+
+【2】调候用神(必须引入)
+当命局存在寒、燥、湿、枯等气候失衡时,
+调候用神优先级高于普通旺衰喜忌。
+
+示例:
+- 冬生金、水寒无火 → 火为调候用神
+- 夏生火、燥而无水 → 水为调候用神
+- 湿土 → 需火
+- 枯木 → 需水
+
+调候用神:
+- 结构稳 → 吉
+- 结构破 → 吉神亦成压力源
+
+================================================
+四、人生K线分数生成逻辑(不变)
+================================================
+
+YearScore =
+  生命周期底盘(年龄阶段)
++ 大运底盘分
++ 大运 × 原局结构修正
++ 流年五行喜忌修正
++ 流年冲合刑害修正
++ 格局顺逆修正
+
+YearScore ∈ [0, 100]
+任何单一流年或大运,不得突破该年龄阶段所允许的波动区间。
+
+保护规则:
+若某一年 YearScore ≤30 或 ≥90,
+其前后两年的波动幅度需自然过渡,
+禁止出现完全不承接的断层式跳变,
+除非明确标注为"破格/重冲之年"。
+
+
+================================================
+五、六大分析模块的【动态评分规则】
+================================================
+================================================
+【重要规则:计算逻辑 与 输出语言的强制分离】
+================================================
+以下内容仅用于模型内部判断与评分计算:
+- 生命周期权重
+- 80% 原盘 / 20% 大运流年比例
+- 青壮年 / 高龄阶段权重差异
+- "评分上行 / 下行 / 权重降低"等描述
+
+在生成最终输出文本(summary / personality / industry / wealth / marriage / health)时:
+
+【强制要求】
+1. 禁止在任何分析文本中直接出现:
+   - "权重"
+   - "评分可上行 / 下行"
+   - "高龄阶段影响降低"
+   - "此项占比为 XX%"
+   - 任何模型内部计算、算法、比例、机制说明
+
+2. 所有分析内容,必须:
+   - 仅基于八字原局、大运、流年之间的
+     合、冲、刑、害、生、克关系
+   - 以传统命理断语的自然语言形式呈现
+   - 让不懂系统规则的命主也能理解其因果
+
+3. 计算逻辑只影响"结果",
+   不得以任何形式"说出计算过程"。
+
+说明:
+六大模块评分(1–10)并非由 YearScore 直接换算,
+而是独立基于命盘结构,
+仅在 20% 权重中参考大运与流年的引动效果。
+
+以下所有评分,统一采用:
+【80% 原命盘 + 20% 大运与流年引动】
+说明:
+20% 的"大运与流年引动",
+以对人生结果影响最大的阶段为权重核心,
+青壮年期(20–55 岁)权重最高,
+童限与高龄阶段权重需自动降低。
+
+评分区间:1–10 分(非固定值)
+
+--------------------------------
+1️⃣ 命理总评(summaryScore)
+--------------------------------
+- 聚焦命局整体结构、用神状态、格局高低
+- 描述"这一盘的天花板与使用方式"
+- 不讨论分数来源、不提人生阶段权重
+
+注意:
+summaryScore 并非 1–100 岁 YearScore 的数学平均,
+而是"命盘结构质量 × 一生可兑现程度"的综合评估值。
+
+
+--------------------------------
+2️⃣ 性格分析(personalityScore)
+--------------------------------
+- 聚焦十神结构是否顺畅
+- 用"想法、行为、情绪反应模式"来描述
+- 可指出优势与容易卡住的性格盲区
+
+【原命盘(80%)】
+基于十神结构是否顺畅:
+
+- 印、食伤、财、官是否形成良性循环
+- 是否存在典型失衡:
+  - 印重无食伤 → 思虑重、压抑
+  - 土多埋金 / 水多木漂
+  - 金木交战严重
+
+结构顺畅 → 7–9
+明显失衡 → 4–6
+极端偏枯 → ≤4
+
+【大运流年(20%)】
+- 是否在关键阶段引动缺失十神
+- 是否放大性格缺陷
+
+--------------------------------
+3️⃣ 事业分析(industryScore)
+--------------------------------
+- 聚焦月柱(事业宫)与官杀状态
+- 结合结构说明"适合怎样的事业环境"
+- 用"顺 / 不顺""稳 / 波动"来表达趋势
+
+【原命盘(80%)】
+重点考察:
+- 月柱(事业宫)状态
+- 官杀是否有制、有根
+- 是否符合格局需求
+
+官杀得用、月柱稳定 → ≥7
+官杀混杂或受损 → 5–6
+事业宫被严重冲克 → ≤5
+
+【大运流年(20%)】
+- 青壮年是否引动官杀或事业用神
+- 是否出现连续破坏事业宫的大运流年
+
+--------------------------------
+4️⃣ 财富分析(wealthScore)
+--------------------------------
+- 聚焦财星与日主承载关系
+- 描述"能不能拿住财""适合怎样的赚钱方式"
+- 可给出操作性建议(稳、分批、避险)
+
+【原命盘(80%)】
+- 财星是否存在
+- 日主是否扛得住财
+
+身强财现 → 高潜力
+身弱财多 → 风险型
+身强无财 → 有力无机
+
+对应底盘:
+- 优秀结构 → ≥7
+- 中等结构 → 5–6
+- 失衡结构 → ≤5
+
+【大运流年(20%)】
+- 是否在青壮年遇到印比扶身 + 财星并现
+- 财星是否被冲破
+
+--------------------------------
+5️⃣ 婚姻分析(marriageScore)
+--------------------------------
+- 聚焦夫妻宫(日支)与合冲关系
+- 男命重点看财星,女命重点看官星
+- 允许描述:
+  - 冲突来源
+  - 缓冲机制(合、通关)
+  - 改善方向(沟通、边界、共识)
+
+【原命盘(80%)】
+- 夫妻宫(日支)是否被冲刑害
+- 男命看财星,女命看官星
+- 是否与格局、用神相冲
+
+稳定 → ≥7
+反复 → 5–6
+严重刑冲 → ≤5
+
+【大运流年(20%)】
+- 是否在关键人生阶段引动刑冲
+- 是否形成持续性或结构性影响
+
+
+--------------------------------
+6️⃣ 健康分析(healthScore)
+--------------------------------
+- 结合五行与中医象意
+- 描述"易发部位""长期隐患"
+- 给出生活方式层面的建议
+- 不涉及概率、年龄权重或评分逻辑
+
+【原命盘(80%)】
+结合五行与中医象意:
+- 木 → 肝胆
+- 火 → 心血
+- 土 → 脾胃
+- 金 → 肺皮肤
+- 水 → 肾泌尿
+
+若某一五行极端偏旺且无制,
+或存在金木、水火等剧烈对战,
+健康底盘 ≤5。
+
+【大运流年(20%)】
+- 是否进一步放大原有失衡
+- 是否在中老年阶段出现极端克制
+
+================================================
+六、K线生成规则(保持)
+================================================
+
+- open = 上一年 close
+- close = 当年 YearScore
+- high / low 由冲合刑害、是否破格、年龄段波动决定
+- 必须呈现明显牛熊波动,禁止平滑
+
+================================================
+七、硬性规则
+================================================
+
+1. 年龄:虚岁,1–100
+2. reason:每年 20–30 字以内
+3. 大运 10 年一换
+4. daYun:只填大运
+5. ganZhi:只填流年
+6. 仅输出纯 JSON,不附加解释文字
+
+================================================
+八、输出 JSON 结构(更新后)
+================================================
+注意:
+以下 JSON 中的 score 数值仅为结构示例,
+所有 Score 字段必须依据系统指令动态计算,
+严禁输出固定值。
+
+{
+  "bazi": ["年柱","月柱","日柱","时柱"],
+  "summary": "命理总评(100字)",
+  "summaryScore": 6,
+  "personality": "性格分析(80字)",
+  "personalityScore": 7,
+  "industry": "事业分析(80字)",
+  "industryScore": 6,
+  "wealth": "财富分析(80字)",
+  "wealthScore": 7,
+  "marriage": "婚姻分析(80字)",
+  "marriageScore": 5,
+  "health": "健康分析(60字)",
+  "healthScore": 4,
+  "chartPoints": [
+    {
+      "age":1,
+      "year":1998,
+      "daYun":"童限",
+      "ganZhi":"戊寅",
+      "open":50,
+      "close":55,
+      "high":60,
+      "low":45,
+      "score":55,
+      "reason":"示例说明"
+    }
+  ]
+}
+`;
+
+// CORS headers
+const corsHeaders = {
+  'Access-Control-Allow-Credentials': 'true',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET,OPTIONS,PATCH,DELETE,POST,PUT',
+  'Access-Control-Allow-Headers': 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version',
+};
+
+export default async function handler(
+  req: VercelRequest,
+  res: VercelResponse,
+) {
+  // Set CORS headers
+  Object.entries(corsHeaders).forEach(([key, value]) => {
+    res.setHeader(key, value);
+  });
+
+  // Handle OPTIONS preflight request
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  // Only accept POST requests
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const {
+      name,
+      gender,
+      birthYear,
+      yearPillar,
+      monthPillar,
+      dayPillar,
+      hourPillar,
+      startAge,
+      firstDaYun
+    } = req.body;
+
+    // Validate required fields
+    if (!gender || !birthYear || !yearPillar || !monthPillar || !dayPillar || !hourPillar || !startAge || !firstDaYun) {
+      return res.status(400).json({ error: '请填写完整的八字信息' });
+    }
+
+    // Read configuration from environment variables
+    const API_KEY = process.env.DEEPSEEK_API_KEY;
+    const API_BASE_URL = process.env.API_BASE_URL || 'https://api.deepseek.com';
+    const MODEL_NAME = process.env.MODEL_NAME || 'deepseek-reasoner';
+
+    if (!API_KEY) {
+      return res.status(500).json({ error: '服务器配置错误：缺少 API Key' });
+    }
+
+    // Calculate Da Yun direction
+    const genderStr = gender === 'Male' ? '男 (乾造)' : '女 (坤造)';
+    const yangStems = ['甲', '丙', '戊', '庚', '壬'];
+    const isYangYear = yangStems.includes(yearPillar.charAt(0));
+    const isForward = gender === 'Male' ? isYangYear : !isYangYear;
+    const daYunDirectionStr = isForward ? '顺行 (Forward)' : '逆行 (Backward)';
+    const yearStemPolarity = isYangYear ? '阳' : '阴';
+    const startAgeInt = parseInt(startAge) || 1;
+
+    const directionExample = isForward
+      ? "例如：第一步是【戊申】，第二步则是【己酉】（顺排）"
+      : "例如：第一步是【戊申】，第二步则是【丁未】（逆排）";
+
+    // Generate user prompt
+    const userPrompt = `
+请根据以下**已经排好的**八字四柱和**指定的大运信息**进行分析。
+
+【基本信息】
+性别：${genderStr}
+姓名：${name || "未提供"}
+出生年份：${birthYear}年 (阳历)
+
+【八字四柱】
+年柱：${yearPillar} (天干属性：${yearStemPolarity})
+月柱：${monthPillar}
+日柱：${dayPillar}
+时柱：${hourPillar}
+
+【大运核心参数】
+1. 起运年龄：${startAge} 岁 (虚岁)。
+2. 第一步大运：${firstDaYun}。
+3. **排序方向**：${daYunDirectionStr}。
+
+【必须执行的算法 - 大运序列生成】
+请严格按照以下步骤生成数据：
+
+1. **锁定第一步**：确认【${firstDaYun}】为第一步大运。
+2. **计算序列**：根据六十甲子顺序和方向（${daYunDirectionStr}），推算出接下来的 9 步大运。
+   ${directionExample}
+3. **填充 JSON**：
+   - Age 1 到 ${startAgeInt - 1}: daYun = "童限"
+   - Age ${startAgeInt} 到 ${startAgeInt + 9}: daYun = [第1步大运: ${firstDaYun}]
+   - Age ${startAgeInt + 10} 到 ${startAgeInt + 19}: daYun = [第2步大运]
+   - Age ${startAgeInt + 20} 到 ${startAgeInt + 29}: daYun = [第3步大运]
+   - ...以此类推直到 100 岁。
+
+【特别警告】
+- **daYun 字段**：必须填大运干支（10年一变），**绝对不要**填流年干支。
+- **ganZhi 字段**：填入该年份的**流年干支**（每年一变，例如 2024=甲辰，2025=乙巳）。
+
+任务：
+1. 确认格局与喜忌。
+2. 生成 **1-100 岁 (虚岁)** 的人生流年K线数据。
+3. 在 reason 字段中提供流年详批。
+4. 生成带评分的命理分析报告（包含命理总评、性格分析、事业分析、财富分析、婚姻分析、健康分析）。
+
+请严格按照系统指令生成 JSON 数据。
+    `;
+
+    // Call AI API
+    const response = await fetch(`${API_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: MODEL_NAME,
+        messages: [
+          { role: 'system', content: BAZI_SYSTEM_INSTRUCTION + '\n\n请务必只返回纯JSON格式数据，不要包含任何markdown代码块标记。' },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.7,
+        max_tokens: 30000,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('AI API Error:', errorText);
+      return res.status(response.status).json({
+        error: `AI 服务请求失败: ${response.status}`,
+        details: errorText
+      });
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+
+    if (!content) {
+      return res.status(500).json({ error: 'AI 未返回内容' });
+    }
+
+    // Extract JSON from response
+    let jsonContent = content;
+
+    // Handle DeepSeek Reasoner thinking tags
+    if (content.includes('<think>') && content.includes('</think>')) {
+      const parts = content.split('</think>');
+      jsonContent = parts[parts.length - 1].trim();
+    }
+
+    // Try to extract JSON from markdown code blocks
+    const jsonMatch = jsonContent.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      jsonContent = jsonMatch[1].trim();
+    } else {
+      // Try to find JSON object boundaries
+      const jsonStartIndex = jsonContent.indexOf('{');
+      const jsonEndIndex = jsonContent.lastIndexOf('}');
+      if (jsonStartIndex !== -1 && jsonEndIndex !== -1) {
+        jsonContent = jsonContent.substring(jsonStartIndex, jsonEndIndex + 1);
+      }
+    }
+
+    // Parse and return JSON
+    const result = JSON.parse(jsonContent);
+
+    // Validate result structure
+    if (!result.chartPoints || !Array.isArray(result.chartPoints)) {
+      return res.status(500).json({ error: '模型返回的数据格式不正确（缺失 chartPoints）' });
+    }
+
+    return res.status(200).json(result);
+
+  } catch (error: any) {
+    console.error('Handler Error:', error);
+    return res.status(500).json({
+      error: '服务器处理错误',
+      message: error.message
+    });
+  }
+}

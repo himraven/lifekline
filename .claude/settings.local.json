@@ -1,0 +1,26 @@
+{
+  "shell": {
+    "safeCommands": [
+      "npm run dev",
+      "npm run build",
+      "npm run preview",
+      "npm install",
+      "npm test",
+      "npx tsc --noEmit",
+      "npx prettier --write .",
+      "npx prettier --check .",
+      "git status",
+      "git diff",
+      "git log",
+      "git add .",
+      "git commit",
+      "git push",
+      "git pull",
+      "ls",
+      "cat",
+      "pwd",
+      "find",
+      "grep"
+    ]
+  }
+}
