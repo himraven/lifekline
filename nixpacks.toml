@@ -1,0 +1,14 @@
+# Nixpacks configuration for Coolify deployment
+# Force Node.js provider instead of static site detection
+
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = ["npm install"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npm run start"
